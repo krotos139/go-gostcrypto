@@ -70,6 +70,19 @@ func ParsePublicKey(der []byte) (*gost3410.PublicKey, error) {
 		return nil, ErrUnsupportedAlgorithm
 	}
 
+	// Идентификатор алгоритма обязан соответствовать разрядности набора
+	// параметров: ...gost3410-12-512 только с 512-битной кривой, прочие
+	// только с 256-битной. Без этой сверки одна и та же точка получает
+	// два разных допустимых представления, а такая неоднозначность в
+	// разборе ключей недопустима.
+	want := 32
+	if spki.Algorithm.Algorithm.Equal(OIDPublicKey512) {
+		want = 64
+	}
+	if curve.Size() != want {
+		return nil, ErrMalformed
+	}
+
 	// Содержимое BIT STRING — DER-кодировка OCTET STRING с координатами.
 	var raw []byte
 	if rest, err := asn1.Unmarshal(spki.PublicKey.RightAlign(), &raw); err != nil || len(rest) != 0 {
