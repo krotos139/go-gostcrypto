@@ -1,0 +1,63 @@
+name: Примеры
+
+# Примеры — часть того, что показывается пользователю, и ломаются они
+# незаметно: собираются они вместе с библиотекой, а вот запускаются ли и
+# делают ли обещанное, обычные тесты не проверяют.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Подготовить документ
+        run: printf 'документ для примеров\n' > doc.txt
+
+      - name: Хэширование
+        run: go run ./examples/hash-file doc.txt
+
+      - name: Устаревшие алгоритмы
+        run: go run ./examples/legacy
+
+      - name: Шифрование файла
+        env:
+          GOST_PASSWORD: пароль для примера
+        run: |
+          go run ./examples/encrypt-file -e doc.txt doc.enc
+          go run ./examples/encrypt-file -d doc.enc doc.out
+          cmp doc.txt doc.out
+
+      - name: Неверный пароль обязан отвергаться
+        env:
+          GOST_PASSWORD: не тот пароль
+        run: |
+          if go run ./examples/encrypt-file -d doc.enc doc.bad; then
+            echo "файл расшифрован не тем паролем"
+            exit 1
+          fi
+
+      - name: Подпись и её разбор
+        run: |
+          go run ./examples/sign-cms doc.txt
+          go run ./examples/inspect-signature doc.txt.p7s doc.txt | tee inspect.log
+          grep -q 'подпись верна' inspect.log
+
+      - name: Разбор обязан отвергать изменённый документ
+        run: |
+          printf 'подменённый документ\n' > other.txt
+          go run ./examples/inspect-signature doc.txt.p7s other.txt | tee bad.log
+          grep -q 'ПОДПИСЬ НЕ ПРОШЛА' bad.log
+
+      - name: Шифрование получателю
+        run: go run ./examples/envelope-cms doc.txt

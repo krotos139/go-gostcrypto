@@ -1,0 +1,21 @@
+version: 2
+
+updates:
+  # Действия GitHub Actions закрепляются по версиям и сами не
+  # обновляются. Устаревшее действие — не только пропущенные
+  # исправления, но и риск, что сборка однажды перестанет запускаться.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+
+  # Внешних зависимостей у библиотеки нет, но правило оставлено:
+  # если одна появится, обновления начнут приходить сразу.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps"

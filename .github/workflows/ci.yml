@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Файлы не отформатированы:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Тесты
+        run: go test -count=1 ./...
+
+      - name: Тесты с детектором гонок
+        run: go test -race -count=1 ./...
+
+      - name: Бенчмарки (компиляция)
+        run: go test -run '^$' -bench . -benchtime=1x ./...
+
+  # Арифметика поля переводит значения между big.Int и словами по 64
+  # разряда. Размер big.Word зависит от платформы, поэтому 32-битная
+  # сборка обязана прогоняться на каждом изменении: ошибка здесь не
+  # приводит к падению сборки, а молча даёт неверную подпись.
+  test32:
+    runs-on: ubuntu-latest
+    env:
+      GOARCH: 386
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: go vet (386)
+        run: go vet ./...
+      - name: Тесты (386)
+        run: go test -count=1 ./...
+
+  # Порядок байт задан явно через encoding/binary, но проверить это
+  # запуском негде: на big-endian платформе доступна только сборка.
+  crossbuild:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { goos: linux, goarch: arm }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: s390x }
+          - { goos: linux, goarch: ppc64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Сборка ${{ matrix.target.goos }}/${{ matrix.target.goarch }}
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+        run: go build ./...
+
+  # Разбор подписей CMS и ключей ASN.1 принимает недоверенный ввод.
+  # Прогон короткий: он ловит не новые находки, а регрессии на уже
+  # накопленном наборе входов и падения на затравках.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Фаззинг
+        run: |
+          set -e
+          go test -run '^$' -fuzz FuzzParse           -fuzztime=40s ./cms/
+          go test -run '^$' -fuzz FuzzDERElements     -fuzztime=20s ./cms/
+          go test -run '^$' -fuzz FuzzParsePublicKey  -fuzztime=20s ./gostasn1/
+          go test -run '^$' -fuzz FuzzParseCertificate -fuzztime=20s ./gostasn1/
+          go test -run '^$' -fuzz FuzzSignatureHalves -fuzztime=10s ./gostasn1/
+          go test -run '^$' -fuzz FuzzPadRoundTrip    -fuzztime=20s ./gost3413/
+          go test -run '^$' -fuzz FuzzModeRoundTrip   -fuzztime=30s ./gost3413/
+          go test -run '^$' -fuzz FuzzMGMRoundTrip    -fuzztime=30s ./mgm/
+          go test -run '^$' -fuzz FuzzMGMOpen         -fuzztime=20s ./mgm/
+          go test -run '^$' -fuzz FuzzUnwrap          -fuzztime=20s ./keywrap/
+          go test -run '^$' -fuzz FuzzWrapRoundTrip   -fuzztime=20s ./keywrap/
+          go test -run '^$' -fuzz FuzzCryptoProUnwrap -fuzztime=20s ./keywrap/
+          go test -run '^$' -fuzz FuzzParseEncrypted   -fuzztime=30s ./pkcs8/
+          go test -run '^$' -fuzz FuzzParse            -fuzztime=30s ./pfx/
+          go test -run '^$' -fuzz FuzzKImp15           -fuzztime=20s ./keywrap/
+      - name: Сохранить найденные входы
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          path: "**/testdata/fuzz/"
+
+  staticcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - run: staticcheck ./...
